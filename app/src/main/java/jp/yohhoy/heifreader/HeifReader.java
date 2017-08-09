@@ -7,7 +7,6 @@ import android.util.Size;
 import android.view.Surface;
 
 import org.mp4parser.IsoFile;
-import org.mp4parser.boxes.apple.PixelAspectRationAtom;
 import org.mp4parser.boxes.iso14496.part12.FileTypeBox;
 import org.mp4parser.boxes.iso14496.part15.HevcConfigurationBox;
 import org.mp4parser.boxes.iso14496.part15.HevcDecoderConfigurationRecord;
@@ -47,7 +46,7 @@ public class HeifReader {
             int pos = bitstream.position();
             int size = bitstream.getInt();  // hevcConfig.getLengthSizeMinusOne()==3
             bitstream.position(pos);
-            bitstream.putInt(1);    // 0x0000001
+            bitstream.putInt(1);    // start_code=0x0000001
             bitstream.position(bitstream.position() + size);
         } while (bitstream.remaining() > 0);
         bitstream.rewind();
@@ -75,13 +74,11 @@ public class HeifReader {
             throw new IOException("unsupported 'ftyp' brands");
         }
 
-        // get image propaties
+        // get image size
         ImageInfo info = new ImageInfo();
         ImageSpatialExtentsBox ispeBox = isoFile.getBoxes(ImageSpatialExtentsBox.class, true).get(0);
-        PixelAspectRationAtom paspBox = isoFile.getBoxes(PixelAspectRationAtom.class, true).get(0);
         info.size = new Size((int)ispeBox.display_width, (int)ispeBox.display_height);
-        Log.i(TAG, "HEIC image size=" + ispeBox.display_width + "x" + ispeBox.display_height
-                + "[" + paspBox.gethSpacing() + ":" + paspBox.getvSpacing() + "]");
+        Log.i(TAG, "HEIC image size=" + ispeBox.display_width + "x" + ispeBox.display_height);
 
         // get HEVC decoder configuration
         // FIXME: assume first HevcConfigurationBox is primary image
