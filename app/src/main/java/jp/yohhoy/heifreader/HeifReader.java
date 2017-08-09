@@ -80,21 +80,29 @@ public class HeifReader {
             throw new IOException("unsupported 'ftyp' brands");
         }
 
-        // parse primary item properties
-        PrimaryItemBox pitmBox = isoFile.getBoxes(PrimaryItemBox.class, true).get(0);
+        // get primary item_ID
+        List<PrimaryItemBox> pitmBoxes = isoFile.getBoxes(PrimaryItemBox.class, true);
+        if (pitmBoxes.isEmpty()) {
+            throw new IOException("PrimaryItemBox not found");
+        }
+        PrimaryItemBox pitmBox = pitmBoxes.get(0);
         pitmBox.parseDetails();
         Log.d(TAG, "HEIC primary item_ID=" + pitmBox.getItemId());
+
+        // get associative item properties
         ItemPropertiesBox iprpBox = isoFile.getBoxes(ItemPropertiesBox.class, true).get(0);
         ItemPropertyAssociation ipmaBox = iprpBox.getBoxes(ItemPropertyAssociation.class).get(0);
         ItemPropertyContainerBox ipcoBox = iprpBox.getBoxes(ItemPropertyContainerBox.class).get(0);
-
         List<Box> primaryPropBoxes = new ArrayList<>();
         for (ItemPropertyAssociation.Item item : ipmaBox.getItems()) {
-            if (item.item_ID != pitmBox.getItemId())
-                continue;
-            for (ItemPropertyAssociation.Assoc assoc: item.associations) {
-                primaryPropBoxes.add(ipcoBox.getBoxes().get(assoc.property_index - 1));
+            if (item.item_ID == pitmBox.getItemId()) {
+                for (ItemPropertyAssociation.Assoc assoc : item.associations) {
+                    primaryPropBoxes.add(ipcoBox.getBoxes().get(assoc.property_index - 1));
+                }
             }
+        }
+        if (primaryPropBoxes.isEmpty()) {
+            throw new IOException("no properties of item_ID(" + pitmBox.getItemId() + ")");
         }
 
         // get image size
@@ -117,13 +125,13 @@ public class HeifReader {
         info.paramset = ByteBuffer.wrap(baos.toByteArray());
         Log.d(TAG, "HEIC HEVC profile=" + hevcConfig.getGeneral_profile_idc()
                 + " level=" + (hevcConfig.getGeneral_level_idc() / 30f)
-                + " bits=" + (hevcConfig.getBitDepthLumaMinus8() + 8));
+                + " bitDepth=" + (hevcConfig.getBitDepthLumaMinus8() + 8));
         if (hevcConfig.getLengthSizeMinusOne() + 1 != 4) {
             throw new IOException("unsupported DecoderConfigurationRecord.LengthSizeMinusOne("
                     + hevcConfig.getLengthSizeMinusOne() + ")");
         }
 
-        // get HEVC bitsteram position
+        // get bitstream position
         ItemLocationBox ilocBox = isoFile.getBoxes(ItemLocationBox.class, true).get(0);
         ilocBox.parseDetails();
         for (ItemLocationBox.Item item : ilocBox.getItems()) {
@@ -133,7 +141,7 @@ public class HeifReader {
                 break;
             }
         }
-        Log.d(TAG, "HEIC HEVC offset=" + info.offset + " length=" + info.length);
+        Log.d(TAG, "HEIC bitstream offset=" + info.offset + " length=" + info.length);
         return info;
     }
 
@@ -179,41 +187,43 @@ public class HeifReader {
         decoder.configure(inputFormat, surface, null, 0);
         MediaFormat outputFormat = decoder.getOutputFormat();
         Log.d(TAG, "HEVC output-format=" + outputFormat);
+
         decoder.start();
-
-        // set bitstream to decoder
-        int inputBufferId = decoder.dequeueInputBuffer(-1);
-        if (inputBufferId < 0) {
-            throw new IllegalStateException("dequeueInputBuffer return " + inputBufferId);
-        }
-        ByteBuffer inBuffer = decoder.getInputBuffer(inputBufferId);
-        inBuffer.put(bitstream);
-        decoder.queueInputBuffer(inputBufferId, 0, bitstream.limit(), 0, 0);
-
-        // notify end of stream
-        inputBufferId = decoder.dequeueInputBuffer(-1);
-        if (inputBufferId < 0) {
-            throw new IllegalStateException("dequeueInputBuffer return " + inputBufferId);
-        }
-        decoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
-
-        // get decoded image
-        MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
-        while (true) {
-            int outputBufferId = decoder.dequeueOutputBuffer(bufferInfo, -1);
-            if (outputBufferId >= 0) {
-                decoder.releaseOutputBuffer(outputBufferId, true);
-                break;
-            } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                outputFormat = decoder.getOutputFormat();
-                Log.d(TAG, "HEVC output-format=" + outputFormat);
-            } else {
-                Log.d(TAG, "HEVC dequeueOutputBuffer return " + outputBufferId);
+        try {
+            // set bitstream to decoder
+            int inputBufferId = decoder.dequeueInputBuffer(-1);
+            if (inputBufferId < 0) {
+                throw new IllegalStateException("dequeueInputBuffer return " + inputBufferId);
             }
-        }
+            ByteBuffer inBuffer = decoder.getInputBuffer(inputBufferId);
+            inBuffer.put(bitstream);
+            decoder.queueInputBuffer(inputBufferId, 0, bitstream.limit(), 0, 0);
 
-        decoder.flush();
-        decoder.stop();
-        decoder.release();
+            // notify end of stream
+            inputBufferId = decoder.dequeueInputBuffer(-1);
+            if (inputBufferId < 0) {
+                throw new IllegalStateException("dequeueInputBuffer return " + inputBufferId);
+            }
+            decoder.queueInputBuffer(inputBufferId, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
+
+            // get decoded image
+            MediaCodec.BufferInfo bufferInfo = new MediaCodec.BufferInfo();
+            while (true) {
+                int outputBufferId = decoder.dequeueOutputBuffer(bufferInfo, -1);
+                if (outputBufferId >= 0) {
+                    decoder.releaseOutputBuffer(outputBufferId, true);
+                    break;
+                } else if (outputBufferId == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    outputFormat = decoder.getOutputFormat();
+                    Log.d(TAG, "HEVC output-format=" + outputFormat);
+                } else {
+                    Log.d(TAG, "HEVC dequeueOutputBuffer return " + outputBufferId);
+                }
+            }
+            decoder.flush();
+        } finally {
+            decoder.stop();
+            decoder.release();
+        }
     }
 }
