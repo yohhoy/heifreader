@@ -6,6 +6,7 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import org.mp4parser.Box;
 import org.mp4parser.IsoFile;
 import org.mp4parser.boxes.iso14496.part12.FileTypeBox;
 import org.mp4parser.boxes.iso14496.part15.HevcConfigurationBox;
@@ -17,9 +18,14 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.Channels;
+import java.util.ArrayList;
 import java.util.List;
 
 import jp.yohhoy.heifreader.iso14496.part12.ItemLocationBox;    // PATCHED
+import jp.yohhoy.heifreader.iso14496.part12.ItemPropertiesBox;
+import jp.yohhoy.heifreader.iso14496.part12.ItemPropertyAssociation;
+import jp.yohhoy.heifreader.iso14496.part12.ItemPropertyContainerBox;
+import jp.yohhoy.heifreader.iso14496.part12.PrimaryItemBox;
 import jp.yohhoy.heifreader.iso23008.part12.ImageSpatialExtentsBox;
 
 /*
@@ -46,7 +52,7 @@ public class HeifReader {
             int pos = bitstream.position();
             int size = bitstream.getInt();  // hevcConfig.getLengthSizeMinusOne()==3
             bitstream.position(pos);
-            bitstream.putInt(1);    // start_code=0x0000001
+            bitstream.putInt(1);    // start_code={0x00 0x00 0x00 0x01}
             bitstream.position(bitstream.position() + size);
         } while (bitstream.remaining() > 0);
         bitstream.rewind();
@@ -74,15 +80,31 @@ public class HeifReader {
             throw new IOException("unsupported 'ftyp' brands");
         }
 
+        // parse primary item properties
+        PrimaryItemBox pitmBox = isoFile.getBoxes(PrimaryItemBox.class, true).get(0);
+        pitmBox.parseDetails();
+        Log.d(TAG, "HEIC primary item_ID=" + pitmBox.getItemId());
+        ItemPropertiesBox iprpBox = isoFile.getBoxes(ItemPropertiesBox.class, true).get(0);
+        ItemPropertyAssociation ipmaBox = iprpBox.getBoxes(ItemPropertyAssociation.class).get(0);
+        ItemPropertyContainerBox ipcoBox = iprpBox.getBoxes(ItemPropertyContainerBox.class).get(0);
+
+        List<Box> primaryPropBoxes = new ArrayList<>();
+        for (ItemPropertyAssociation.Item item : ipmaBox.getItems()) {
+            if (item.item_ID != pitmBox.getItemId())
+                continue;
+            for (ItemPropertyAssociation.Assoc assoc: item.associations) {
+                primaryPropBoxes.add(ipcoBox.getBoxes().get(assoc.property_index - 1));
+            }
+        }
+
         // get image size
         ImageInfo info = new ImageInfo();
-        ImageSpatialExtentsBox ispeBox = isoFile.getBoxes(ImageSpatialExtentsBox.class, true).get(0);
+        ImageSpatialExtentsBox ispeBox = findBox(primaryPropBoxes, ImageSpatialExtentsBox.class);
         info.size = new Size((int)ispeBox.display_width, (int)ispeBox.display_height);
         Log.i(TAG, "HEIC image size=" + ispeBox.display_width + "x" + ispeBox.display_height);
 
         // get HEVC decoder configuration
-        // FIXME: assume first HevcConfigurationBox is primary image
-        HevcConfigurationBox hvccBox = isoFile.getBoxes(HevcConfigurationBox.class, true).get(0);
+        HevcConfigurationBox hvccBox = findBox(primaryPropBoxes, HevcConfigurationBox.class);
         HevcDecoderConfigurationRecord hevcConfig = hvccBox.getHevcDecoderConfigurationRecord();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         final byte[] startCode = { 0x00, 0x00, 0x00, 0x01 };
@@ -101,17 +123,28 @@ public class HeifReader {
                     + hevcConfig.getLengthSizeMinusOne() + ")");
         }
 
-        // get HEVC decoder configuration
+        // get HEVC bitsteram position
         ItemLocationBox ilocBox = isoFile.getBoxes(ItemLocationBox.class, true).get(0);
         ilocBox.parseDetails();
-        // FIXME: assume first item and its first extent is primary image
         for (ItemLocationBox.Item item : ilocBox.getItems()) {
-            info.offset = (int)item.baseOffset;
-            info.length = (int)item.extents.get(0).extentLength;
-            break;
+            if (item.itemId == pitmBox.getItemId()) {
+                info.offset = (int) item.baseOffset;
+                info.length = (int) item.extents.get(0).extentLength;
+                break;
+            }
         }
-        Log.d(TAG, "HEIC item offset=" + info.offset + " length=" + info.length);
+        Log.d(TAG, "HEIC HEVC offset=" + info.offset + " length=" + info.length);
         return info;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Box> T findBox(List<Box> container, Class<T> clazz) {
+        for (Box box : container) {
+            if (clazz.isInstance(box)) {
+                return (T)box;
+            }
+        }
+        return null;
     }
 
     private static MediaCodec findHevcDecoder() {
