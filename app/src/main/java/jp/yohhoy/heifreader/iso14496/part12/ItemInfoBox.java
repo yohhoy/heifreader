@@ -24,13 +24,18 @@ public final class ItemInfoBox extends AbstractContainerBox {
 
     @Override
     public void parse(ReadableByteChannel dataSource, ByteBuffer header, long contentSize, BoxParser boxParser) throws IOException {
-        ByteBuffer buffer = ByteBuffer.allocate(6);
+        ByteBuffer buffer = ByteBuffer.allocate(4);
         dataSource.read(buffer);
         buffer.rewind();
         version = IsoTypeReader.readUInt8(buffer);
         flags = IsoTypeReader.readUInt24(buffer);
-        //entryCount = IsoTypeReader.readUInt16(buffer);
-        initContainer(dataSource, contentSize - 6, boxParser);
+
+        int entryCountLength = (version == 0) ? 2 : 4;
+        buffer = ByteBuffer.allocate(entryCountLength);
+        dataSource.read(buffer);
+        buffer.rewind();
+
+        initContainer(dataSource, contentSize - 4 - entryCountLength, boxParser);
 
         for (ItemInfoEntry entry : getBoxes(ItemInfoEntry.class)) {
             entry.parseDetails();
