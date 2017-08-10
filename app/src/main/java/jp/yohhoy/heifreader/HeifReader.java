@@ -2,6 +2,7 @@ package jp.yohhoy.heifreader;
 
 import android.media.MediaCodec;
 import android.media.MediaFormat;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -37,27 +38,12 @@ public class HeifReader {
     /*
      * load HEIF image
      */
-    static public Size loadHeif(byte[] heif, Surface surface) throws IOException {
+    public static Size loadHeif(byte[] heif, Surface surface) throws IOException {
         ByteArrayInputStream bais = new ByteArrayInputStream(heif);
         IsoFile isoFile = new IsoFile(Channels.newChannel(bais));
         ImageInfo info = parseHeif(isoFile);
-
-        // extract HEVC bitstream
-        ByteBuffer bitstream = ByteBuffer.allocate(info.length)
-                .put(heif, info.offset, info.length)
-                .order(ByteOrder.BIG_ENDIAN);
-        bitstream.rewind();
-        // convert hvcC to Annex.B format
-        do {
-            int pos = bitstream.position();
-            int size = bitstream.getInt();  // hevcConfig.getLengthSizeMinusOne()==3
-            bitstream.position(pos);
-            bitstream.putInt(1);    // start_code={0x00 0x00 0x00 0x01}
-            bitstream.position(bitstream.position() + size);
-        } while (bitstream.remaining() > 0);
-        bitstream.rewind();
-
-        renderHevcImage(bitstream, info.paramset, info.size, surface);
+        ByteBuffer bitstream = extractBitstream(heif, info);
+        renderHevcImage(bitstream, info, surface);
         return info.size;
     }
 
@@ -72,18 +58,18 @@ public class HeifReader {
         // validate brand compatibility ('ftyp' box)
         List<FileTypeBox> ftypBoxes = isoFile.getBoxes(FileTypeBox.class);
         if (ftypBoxes.size() != 1) {
-            throw new IOException("'ftyp' box shall be unique");
+            throw new IOException("FileTypeBox('ftyp') shall be unique");
         }
         FileTypeBox ftypBox = ftypBoxes.get(0);
         Log.d(TAG, "HEIC ftyp=" + ftypBox);
         if (!"mif1".equals(ftypBox.getMajorBrand())|| ftypBox.getCompatibleBrands().indexOf("heic") < 0) {
-            throw new IOException("unsupported 'ftyp' brands");
+            throw new IOException("unsupported FileTypeBox('ftyp') brands");
         }
 
         // get primary item_ID
         List<PrimaryItemBox> pitmBoxes = isoFile.getBoxes(PrimaryItemBox.class, true);
         if (pitmBoxes.isEmpty()) {
-            throw new IOException("PrimaryItemBox not found");
+            throw new IOException("PrimaryItemBox('pitm') not found");
         }
         PrimaryItemBox pitmBox = pitmBoxes.get(0);
         pitmBox.parseDetails();
@@ -101,18 +87,21 @@ public class HeifReader {
                 }
             }
         }
-        if (primaryPropBoxes.isEmpty()) {
-            throw new IOException("no properties of item_ID(" + pitmBox.getItemId() + ")");
-        }
 
         // get image size
         ImageInfo info = new ImageInfo();
         ImageSpatialExtentsBox ispeBox = findBox(primaryPropBoxes, ImageSpatialExtentsBox.class);
+        if (ispeBox == null) {
+            throw new IOException("ImageSpatialExtentsBox('ispe') not found");
+        }
         info.size = new Size((int)ispeBox.display_width, (int)ispeBox.display_height);
         Log.i(TAG, "HEIC image size=" + ispeBox.display_width + "x" + ispeBox.display_height);
 
         // get HEVC decoder configuration
         HevcConfigurationBox hvccBox = findBox(primaryPropBoxes, HevcConfigurationBox.class);
+        if (hvccBox == null) {
+            throw new IOException("HevcConfigurationBox('hvcC') not found");
+        }
         HevcDecoderConfigurationRecord hevcConfig = hvccBox.getHevcDecoderConfigurationRecord();
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         final byte[] startCode = { 0x00, 0x00, 0x00, 0x01 };
@@ -132,7 +121,11 @@ public class HeifReader {
         }
 
         // get bitstream position
-        ItemLocationBox ilocBox = isoFile.getBoxes(ItemLocationBox.class, true).get(0);
+        List<ItemLocationBox> ilocBoxes = isoFile.getBoxes(ItemLocationBox.class, true);
+        if (ilocBoxes.isEmpty()) {
+            throw new IOException("ItemLocationBox('iloc') not found");
+        }
+        ItemLocationBox ilocBox = ilocBoxes.get(0);
         ilocBox.parseDetails();
         for (ItemLocationBox.Item item : ilocBox.getItems()) {
             if (item.itemId == pitmBox.getItemId()) {
@@ -145,11 +138,29 @@ public class HeifReader {
         return info;
     }
 
+    private static ByteBuffer extractBitstream(byte[] heif, ImageInfo info) {
+        // extract HEVC bitstream
+        ByteBuffer bitstream = ByteBuffer.allocate(info.length)
+                .put(heif, info.offset, info.length)
+                .order(ByteOrder.BIG_ENDIAN);
+        bitstream.rewind();
+        // convert hvcC format to Annex.B format
+        do {
+            int pos = bitstream.position();
+            int size = bitstream.getInt();  // hevcConfig.getLengthSizeMinusOne()==3
+            bitstream.position(pos);
+            bitstream.putInt(1);    // start_code={0x00 0x00 0x00 0x01}
+            bitstream.position(bitstream.position() + size);
+        } while (bitstream.remaining() > 0);
+        bitstream.rewind();
+        return bitstream;
+    }
+
     @SuppressWarnings("unchecked")
     private static <T extends Box> T findBox(List<Box> container, Class<T> clazz) {
         for (Box box : container) {
             if (clazz.isInstance(box)) {
-                return (T)box;
+                return (T) box;
             }
         }
         return null;
@@ -166,28 +177,28 @@ public class HeifReader {
                 Log.i(TAG, "codec \"" + name + "\" is available");
                 return codec;
             } catch (IOException | IllegalArgumentException ex) {
-                Log.d(TAG, "codec \"" + name + "\" not found");
+                Log.d(TAG, "codec \"" + name + "\" not found", ex);
             }
         }
-        Log.w(TAG, "HEVC decoder is not available");
         return null;
     }
 
-    private static void renderHevcImage(ByteBuffer bitstream, ByteBuffer paramset, Size size, Surface surface) {
+    private static void renderHevcImage(ByteBuffer bitstream, ImageInfo info, Surface surface) {
         MediaCodec decoder = findHevcDecoder();
         if (decoder == null) {
             throw new RuntimeException("no HEVC decoding support");
         }
 
         // configure HEVC decoder
-        MediaFormat inputFormat = MediaFormat.createVideoFormat("video/hevc", size.getWidth(), size.getHeight());
+        MediaFormat inputFormat = MediaFormat.createVideoFormat("video/hevc", info.size.getWidth(), info.size.getHeight());
         inputFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, bitstream.limit());
-        inputFormat.setByteBuffer("csd-0", paramset);
+        inputFormat.setByteBuffer("csd-0", info.paramset);
         Log.d(TAG, "HEVC input-format=" + inputFormat);
         decoder.configure(inputFormat, surface, null, 0);
         MediaFormat outputFormat = decoder.getOutputFormat();
         Log.d(TAG, "HEVC output-format=" + outputFormat);
 
+        long beginTime = SystemClock.elapsedRealtimeNanos();
         decoder.start();
         try {
             // set bitstream to decoder
@@ -225,5 +236,7 @@ public class HeifReader {
             decoder.stop();
             decoder.release();
         }
+        long endTime = SystemClock.elapsedRealtimeNanos();
+        Log.i(TAG, "HEVC decoding elapsed=" + (endTime - beginTime) / 1000000.f + "[msec]");
     }
 }
