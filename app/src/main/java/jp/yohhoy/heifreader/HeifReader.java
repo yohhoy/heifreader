@@ -28,6 +28,8 @@ import android.graphics.ImageFormat;
 import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaCodec;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.SystemClock;
 import android.support.v8.renderscript.Allocation;
@@ -55,6 +57,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import jp.yohhoy.heifreader.iso14496.part12.ItemLocationBox;    // PATCHED
@@ -80,6 +83,7 @@ public class HeifReader {
 
     private static RenderScript mRenderScript;
     private static File mCacheDir;
+    private static String mDecoderName;
 
     /**
      * Initialize HeifReader module.
@@ -89,6 +93,26 @@ public class HeifReader {
     public static void initialize(Context context) {
         mRenderScript = RenderScript.create(context);
         mCacheDir = context.getCacheDir();
+
+        // find HEVC decoder
+        int numCodecs = MediaCodecList.getCodecCount();
+        for (int i = 0; i < numCodecs; i++) {
+            MediaCodecInfo codecInfo = MediaCodecList.getCodecInfoAt(i);
+            if (codecInfo.isEncoder()) {
+                continue;
+            }
+            for (String type : codecInfo.getSupportedTypes()) {
+                if (type.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
+                    mDecoderName = codecInfo.getName();
+                    MediaCodecInfo.CodecCapabilities cap = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC);
+                    MediaCodecInfo.VideoCapabilities vcap = cap.getVideoCapabilities();
+                    Log.i(TAG, "HEVC decoder=\"" + mDecoderName + "\""
+                            + " max-image=" + vcap.getSupportedWidths().getUpper() + "x" + vcap.getSupportedHeights().getUpper()
+                            + " color-fmts=" + Arrays.toString(cap.colorFormats)
+                    );
+                }
+            }
+        }
     }
 
     /**
@@ -322,26 +346,11 @@ public class HeifReader {
         return null;
     }
 
-    private static MediaCodec findHevcDecoder() {
-        // "video/hevc" may select hardware decoder on the device.
-        // "OMX.google.hevc.decoder" is software decoder.
-        final String[] codecNames = {"video/hevc", "OMX.google.hevc.decoder"};
-
-        for (String name : codecNames) {
-            try {
-                MediaCodec codec = MediaCodec.createByCodecName(name);
-                Log.i(TAG, "codec \"" + name + "\" is available");
-                return codec;
-            } catch (IOException | IllegalArgumentException ex) {
-                Log.d(TAG, "codec \"" + name + "\" not found");
-            }
-        }
-        return null;
-    }
-
     private static void renderHevcImage(ByteBuffer bitstream, ImageInfo info, Surface surface) {
-        MediaCodec decoder = findHevcDecoder();
-        if (decoder == null) {
+        MediaCodec decoder;
+        try {
+            decoder = MediaCodec.createByCodecName(mDecoderName);
+        }  catch (IOException ex) {
             throw new RuntimeException("no HEVC decoding support");
         }
 
