@@ -129,12 +129,15 @@ public class HeifReader {
             ImageInfo info = parseHeif(isoFile);
 
             ByteBuffer bitstream = extractBitstream(data, info);
-            ImageReader reader = ImageReader.newInstance(info.size.getWidth(), info.size.getHeight(), ImageFormat.YV12, 1);
-            try {
+            try (ImageReader reader = ImageReader.newInstance(info.size.getWidth(), info.size.getHeight(), ImageFormat.YV12, 1)) {
                 renderHevcImage(bitstream, info, reader.getSurface());
-                return convertToBitmap(reader.acquireNextImage());
-            } finally {
-                reader.close();
+                Image image = null;
+                try {
+                    image = reader.acquireNextImage();
+                    return convertToBitmap(image);
+                } finally {
+                    image.close();
+                }
             }
         } catch (IOException ex) {
             Log.e(TAG, "decodeByteArray failure", ex);
