@@ -204,6 +204,7 @@ public class HeifReader {
         assertPrecondition();
         try {
             // write stream to temporary file
+            long beginTime = SystemClock.elapsedRealtimeNanos();
             File heifFile = File.createTempFile("heifreader", "heif", mCacheDir);
             FileOutputStream fos = new FileOutputStream(heifFile);
             try {
@@ -221,6 +222,8 @@ public class HeifReader {
             } finally {
                 fos.close();
             }
+            long endTime = SystemClock.elapsedRealtimeNanos();
+            Log.i(TAG, "HEIC caching elapsed=" + (endTime - beginTime) / 1000000.f + "[msec]");
             return decodeFile(heifFile.getAbsolutePath());
         } catch (IOException ex) {
             Log.e(TAG, "decodeStream failure", ex);
@@ -346,24 +349,29 @@ public class HeifReader {
         return null;
     }
 
-    private static void renderHevcImage(ByteBuffer bitstream, ImageInfo info, Surface surface) {
-        MediaCodec decoder;
+    private static MediaCodec configureDecoder(ImageInfo info, int maxInputSize, Surface surface) {
         try {
-            decoder = MediaCodec.createByCodecName(mDecoderName);
+            MediaCodec decoder = MediaCodec.createByCodecName(mDecoderName);
+            MediaFormat inputFormat = MediaFormat.createVideoFormat(
+                    MediaFormat.MIMETYPE_VIDEO_HEVC, info.size.getWidth(), info.size.getHeight());
+            inputFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, maxInputSize);
+            inputFormat.setByteBuffer("csd-0", info.paramset);
+            Log.d(TAG, "HEVC input-format=" + inputFormat);
+            decoder.configure(inputFormat, surface, null, 0);
+            return decoder;
         }  catch (IOException ex) {
             throw new RuntimeException("no HEVC decoding support");
         }
+    }
+
+    private static void renderHevcImage(ByteBuffer bitstream, ImageInfo info, Surface surface) {
+        long beginTime = SystemClock.elapsedRealtimeNanos();
 
         // configure HEVC decoder
-        MediaFormat inputFormat = MediaFormat.createVideoFormat("video/hevc", info.size.getWidth(), info.size.getHeight());
-        inputFormat.setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, bitstream.limit());
-        inputFormat.setByteBuffer("csd-0", info.paramset);
-        Log.d(TAG, "HEVC input-format=" + inputFormat);
-        decoder.configure(inputFormat, surface, null, 0);
+        MediaCodec decoder = configureDecoder(info, bitstream.limit(), surface);
         MediaFormat outputFormat = decoder.getOutputFormat();
         Log.d(TAG, "HEVC output-format=" + outputFormat);
 
-        long beginTime = SystemClock.elapsedRealtimeNanos();
         decoder.start();
         try {
             // set bitstream to decoder
