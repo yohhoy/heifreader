@@ -84,6 +84,7 @@ public class HeifReader {
     private static RenderScript mRenderScript;
     private static File mCacheDir;
     private static String mDecoderName;
+    private static Size mDecoderSupportedSize;
 
     /**
      * Initialize HeifReader module.
@@ -94,7 +95,9 @@ public class HeifReader {
         mRenderScript = RenderScript.create(context);
         mCacheDir = context.getCacheDir();
 
-        // find HEVC decoder
+        // find best HEVC decoder
+        mDecoderName = null;
+        mDecoderSupportedSize = new Size(0, 0);
         int numCodecs = MediaCodecList.getCodecCount();
         for (int i = 0; i < numCodecs; i++) {
             MediaCodecInfo codecInfo = MediaCodecList.getCodecInfoAt(i);
@@ -103,16 +106,24 @@ public class HeifReader {
             }
             for (String type : codecInfo.getSupportedTypes()) {
                 if (type.equalsIgnoreCase(MediaFormat.MIMETYPE_VIDEO_HEVC)) {
-                    mDecoderName = codecInfo.getName();
                     MediaCodecInfo.CodecCapabilities cap = codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_HEVC);
                     MediaCodecInfo.VideoCapabilities vcap = cap.getVideoCapabilities();
-                    Log.i(TAG, "HEVC decoder=\"" + mDecoderName + "\""
-                            + " max-image=" + vcap.getSupportedWidths().getUpper() + "x" + vcap.getSupportedHeights().getUpper()
-                            + " color-fmts=" + Arrays.toString(cap.colorFormats)
+                    Size supportedSize = new Size(vcap.getSupportedWidths().getUpper(), vcap.getSupportedHeights().getUpper());
+                    Log.d(TAG, "HEVC decoder=\"" + codecInfo.getName() + "\""
+                            + " supported-size=" + supportedSize
+                            + " color-formats=" + Arrays.toString(cap.colorFormats)
                     );
+                    if (mDecoderSupportedSize.getWidth() * mDecoderSupportedSize.getHeight() < supportedSize.getWidth() * supportedSize.getHeight()) {
+                        mDecoderName = codecInfo.getName();
+                        mDecoderSupportedSize = supportedSize;
+                    }
                 }
             }
         }
+        if (mDecoderName == null) {
+            throw new RuntimeException("no HEVC decoding support");
+        }
+        Log.i(TAG, "HEVC decoder=\"" + mDecoderName + "\" supported-size=" + mDecoderSupportedSize);
     }
 
     /**
@@ -353,6 +364,9 @@ public class HeifReader {
     }
 
     private static MediaCodec configureDecoder(ImageInfo info, int maxInputSize, Surface surface) {
+        if (mDecoderSupportedSize.getWidth() < info.size.getWidth() || mDecoderSupportedSize.getHeight() < info.size.getHeight()) {
+            Log.w(TAG, "HEVC image may exceed decoder capability");
+        }
         try {
             MediaCodec decoder = MediaCodec.createByCodecName(mDecoderName);
             MediaFormat inputFormat = MediaFormat.createVideoFormat(
