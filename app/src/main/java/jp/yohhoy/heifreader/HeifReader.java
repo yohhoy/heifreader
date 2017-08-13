@@ -140,14 +140,16 @@ public class HeifReader {
             ImageInfo info = parseHeif(isoFile);
 
             ByteBuffer bitstream = extractBitstream(data, info);
-            try (ImageReader reader = ImageReader.newInstance(info.size.getWidth(), info.size.getHeight(), ImageFormat.YV12, 1)) {
-                renderHevcImage(bitstream, info, reader.getSurface());
-                Image image = null;
+            try {
+                return renderHevcImageWithFormat(bitstream, info, ImageFormat.YV12);
+            } catch (FormatFallbackException ex) {
+                Log.w(TAG, "rendering YV12 format failure; fallback to RGB565");
                 try {
-                    image = reader.acquireNextImage();
-                    return convertToBitmap(image);
-                } finally {
-                    image.close();
+                    bitstream.rewind();
+                    return renderHevcImageWithFormat(bitstream, info, ImageFormat.RGB_565);
+                } catch (FormatFallbackException ex2) {
+                    Log.e(TAG, "rendering RGB565 format failure", ex2);
+                    return null;
                 }
             }
         } catch (IOException ex) {
@@ -381,6 +383,34 @@ public class HeifReader {
         }
     }
 
+    private static Bitmap renderHevcImageWithFormat(ByteBuffer bitstream, ImageInfo info, int imageFormat) throws FormatFallbackException {
+        try (ImageReader reader = ImageReader.newInstance(info.size.getWidth(), info.size.getHeight(), imageFormat, 1)) {
+            renderHevcImage(bitstream, info, reader.getSurface());
+            Image image = null;
+            try {
+                try {
+                    image = reader.acquireNextImage();
+                } catch (UnsupportedOperationException ex) {
+                    throw new FormatFallbackException(ex);
+                }
+
+                switch (image.getFormat()) {
+                    case ImageFormat.YUV_420_888:
+                    case ImageFormat.YV12:
+                        return convertYuv420ToBitmap(image);
+                    case ImageFormat.RGB_565:
+                        return convertRgb565ToBitmap(image);
+                    default:
+                        throw new RuntimeException("unsupported image format(" + image.getFormat() + ")");
+                }
+            } finally {
+                if (image != null) {
+                    image.close();
+                }
+            }
+        }
+    }
+
     private static void renderHevcImage(ByteBuffer bitstream, ImageInfo info, Surface surface) {
         long beginTime = SystemClock.elapsedRealtimeNanos();
 
@@ -430,10 +460,7 @@ public class HeifReader {
         Log.i(TAG, "HEVC decoding elapsed=" + (endTime - beginTime) / 1000000.f + "[msec]");
     }
 
-    private static Bitmap convertToBitmap(Image image) {
-        if (image.getFormat() != ImageFormat.YUV_420_888) {
-            throw new RuntimeException("unsupported image format(" + image.getFormat() + ")");
-        }
+    private static Bitmap convertYuv420ToBitmap(Image image) {
         RenderScript rs = mRenderScript;
         final int width = image.getWidth();
         final int height = image.getHeight();
@@ -462,10 +489,23 @@ public class HeifReader {
         return bmp;
     }
 
+    private static Bitmap convertRgb565ToBitmap(Image image) {
+        Bitmap bmp = Bitmap.createBitmap(image.getWidth(), image.getHeight(), Bitmap.Config.RGB_565);
+        Image.Plane[] planes = image.getPlanes();
+        bmp.copyPixelsFromBuffer(planes[0].getBuffer());
+        return bmp;
+    }
+
     private static class ImageInfo {
         Size size;
         ByteBuffer paramset;
         int offset;
         int length;
+    }
+
+    private static class FormatFallbackException extends Exception {
+        FormatFallbackException(Throwable ex) {
+            super(ex);
+        }
     }
 }
