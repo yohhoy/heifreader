@@ -174,12 +174,9 @@ public class HeifReader {
                 return null;
             }
             byte[] data = new byte[(int) fileSize];
-            FileInputStream fis = new FileInputStream(file);
-            try {
+            try (FileInputStream fis = new FileInputStream(file)) {
                 fis.read(data);
                 return decodeByteArray(data);
-            } finally {
-                fis.close();
             }
         } catch (IOException ex) {
             Log.e(TAG, "decodeFile failure", ex);
@@ -198,7 +195,7 @@ public class HeifReader {
         assertPrecondition();
         try {
             int length = (int) res.openRawResourceFd(id).getLength();
-            byte data[] = new byte[length];
+            byte[] data = new byte[length];
             res.openRawResource(id).read(data);
             return decodeByteArray(data);
         } catch (IOException ex) {
@@ -222,8 +219,7 @@ public class HeifReader {
             // write stream to temporary file
             long beginTime = SystemClock.elapsedRealtimeNanos();
             File heifFile = File.createTempFile("heifreader", "heif", mCacheDir);
-            FileOutputStream fos = new FileOutputStream(heifFile);
-            try {
+            try (FileOutputStream fos = new FileOutputStream(heifFile)) {
                 byte[] buf = new byte[4096];
                 int totalLength = 0;
                 int len;
@@ -235,8 +231,6 @@ public class HeifReader {
                         return null;
                     }
                 }
-            } finally {
-                fos.close();
             }
             long endTime = SystemClock.elapsedRealtimeNanos();
             Log.i(TAG, "HEIC caching elapsed=" + (endTime - beginTime) / 1000000.f + "[msec]");

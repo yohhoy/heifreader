@@ -25,7 +25,8 @@ public class MainActivity extends Activity {
     private static final String TAG = "MainActivity";
 
     private static final String URL_BASE = "https://github.com/nokiatech/heif/raw/gh-pages/content/images/";
-    private static final String URL_IMAGES[] = {
+    //private static final String URL_BASE = "https://github.com/nokiatech/heif/raw/ce04febfbf6f9aba9df635d6bcfbf3f447f9af2c/content/images/";
+    private static final String[] URL_IMAGES = {
             "lena [local]",  // internal resource
             "autumn_1440x960.heic",
             "cheers_1440x960.heic",
