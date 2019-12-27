@@ -322,7 +322,7 @@ public class HeifReader {
         ilocBox.parseDetails();
         for (ItemLocationBox.Item item : ilocBox.getItems()) {
             if (item.itemId == pitmBox.getItemId()) {
-                info.offset = (int) item.baseOffset;
+                info.offset = (int) item.baseOffset + (int) item.extents.get(0).extentOffset;
                 info.length = (int) item.extents.get(0).extentLength;
                 break;
             }
