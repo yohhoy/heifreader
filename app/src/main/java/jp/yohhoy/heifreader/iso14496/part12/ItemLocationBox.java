@@ -360,5 +360,16 @@ public class ItemLocationBox extends AbstractFullBox {
         }
     }
 
-
+    @Override
+    public String toString() {
+        final StringBuilder sb = new StringBuilder();
+        sb.append("ItemLocationBox");
+        sb.append("{offsetSize=").append(offsetSize);
+        sb.append(", lengthSize=").append(lengthSize);
+        sb.append(", baseOffsetSize=").append(baseOffsetSize);
+        sb.append(", indexSize=").append(indexSize);
+        sb.append(", items=").append(items);
+        sb.append('}');
+        return sb.toString();
+    }
 }
