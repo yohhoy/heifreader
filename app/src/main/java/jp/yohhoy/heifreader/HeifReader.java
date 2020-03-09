@@ -459,17 +459,46 @@ public class HeifReader {
         RenderScript rs = mRenderScript;
         final int width = image.getWidth();
         final int height = image.getHeight();
+        final int chromaWidth = width / 2;
+        final int chromaHeight = height / 2;
+        final int lumaSize = width * height;
+        final int chromaSize = chromaWidth * chromaHeight;
 
         // prepare input Allocation for RenderScript
         Type.Builder inType = new Type.Builder(rs, Element.U8(rs)).setX(width).setY(height).setYuvFormat(ImageFormat.YV12);
         Allocation inAlloc = Allocation.createTyped(rs, inType.create(), Allocation.USAGE_SCRIPT);
         byte[] rawBuffer = new byte[inAlloc.getBytesSize()];
-        int lumaSize = width * height;
-        int chromaSize = (width / 2) * (height / 2);
         Image.Plane[] planes = image.getPlanes();
-        planes[0].getBuffer().get(rawBuffer, 0, lumaSize);
-        planes[1].getBuffer().get(rawBuffer, lumaSize, chromaSize);
-        planes[2].getBuffer().get(rawBuffer, lumaSize + chromaSize, chromaSize);
+        final int lumaStride = planes[0].getRowStride();
+        final int chromaStride = planes[1].getRowStride();
+        if (lumaStride == width) {
+            // copy luma plane to rawBuffer (w/o padding)
+            planes[0].getBuffer().get(rawBuffer, 0, lumaSize);
+        } else {
+            // copy luma plane to rawBuffer
+            ByteBuffer planeBuf = planes[0].getBuffer();
+            for (int y = 0; y < height; y++) {
+                planeBuf.position(lumaStride * y);
+                planeBuf.get(rawBuffer, width * y, width);
+            }
+        }
+        if (chromaStride == chromaWidth) {
+            // copy chroma planes to rawBuffer (w/o padding)
+            planes[1].getBuffer().get(rawBuffer, lumaSize, chromaSize);
+            planes[2].getBuffer().get(rawBuffer, lumaSize + chromaSize, chromaSize);
+        } else {
+            // copy chroma planes to rawBuffer
+            ByteBuffer planeBuf = planes[1].getBuffer();
+            for (int y = 0; y < chromaHeight; y++) {
+                planeBuf.position(chromaStride * y);
+                planeBuf.get(rawBuffer, lumaSize + chromaWidth * y, chromaWidth);
+            }
+            planeBuf = planes[2].getBuffer();
+            for (int y = 0; y < chromaHeight; y++) {
+                planeBuf.position(chromaStride * y);
+                planeBuf.get(rawBuffer, lumaSize + chromaSize + chromaWidth * y, chromaWidth);
+            }
+        }
         inAlloc.copyFromUnchecked(rawBuffer);
 
         // prepare output Allocation for RenderScript
