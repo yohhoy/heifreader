@@ -255,7 +255,8 @@ public class HeifReader {
         }
         FileTypeBox ftypBox = ftypBoxes.get(0);
         Log.d(TAG, "HEIC ftyp=" + ftypBox);
-        if (!"mif1".equals(ftypBox.getMajorBrand()) || ftypBox.getCompatibleBrands().indexOf("heic") < 0) {
+        if (!("mif1".equals(ftypBox.getMajorBrand()) || "heic".equals(ftypBox.getMajorBrand())
+                || !ftypBox.getCompatibleBrands().contains("heic"))) {
             throw new IOException("unsupported FileTypeBox('ftyp') brands");
         }
 
