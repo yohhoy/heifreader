@@ -1,6 +1,7 @@
 # HeifReader
 
 HEIF(High Efficiency Image Format) reader for Android.
+[![API](https://img.shields.io/badge/API-21%2B-brightgreen.svg?style=flat)](https://android-arsenal.com/api?level=21)
 
 - Support H.265/HEVC(High Efficiency Video Coding) still image only.
 - Ignore thumbnail, decode primary image only.
